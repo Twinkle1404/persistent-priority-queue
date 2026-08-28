@@ -24,7 +24,7 @@ A Python implementation of a persistent priority queue satisfying the seven requ
 | `extract_min` | `PersistentPriorityQueue.extract_min()` | ✅ Yes | Removes & returns lowest effective priority item |
 | `extract_max` | `PersistentPriorityQueue.extract_max()` | ✅ Yes | Removes & returns highest effective priority item |
 | `peek` | `PersistentPriorityQueue.peek(mode="min"\|"max")` | ✅ Yes | Inspects top item without removing |
-| `update` | `PersistentPriorityQueue.update(id, prio, payload)` | ✅ Yes | Updates priority and/or payload (supports `None`) |
+| `update` | `PersistentPriorityQueue.update(id, prio, payload)` | ✅ Yes | Updates priority and/or payload (supports `None` via sentinel) |
 | `delete` | `PersistentPriorityQueue.delete(item_id)` | ✅ Yes | Removes item by string ID |
 | `is_empty` | `PersistentPriorityQueue.is_empty()` | ✅ Yes | Returns boolean |
 | **Persistence** | `JSONFileStorage` / `SQLiteStorage` | ✅ Yes | State persists across process restarts |
@@ -73,12 +73,12 @@ pq.is_empty()                     # True / False
 
 ## 4. Persistence Strategy & Durability
 
-1. **JSON File Storage (Default & Primary Assignment Backend)**:
-   - Primary persistence solution using temporary file writes + `os.fsync()` + atomic filesystem replacement (`os.replace`).
-   - Designed to reduce the risk of partial file writes upon unexpected process termination.
+1. **JSON File Storage (Primary Assignment Backend & Default)**:
+   - Primary persistence solution using temporary file writes (`.tmp`) + `f.flush()` + `os.fsync()` + atomic filesystem replacement (`os.replace`).
+   - The JSON backend writes to a temporary file, synchronizes the file to disk buffers, and atomically replaces the previous file to reduce the risk of partial or corrupted persistence during process interruption.
    - If an existing persistence file is corrupted or unreadable, the loader raises `PersistenceCorruptionError` and **preserves the corrupted file on disk** rather than silently wiping queue data.
-2. **PostgreSQL Storage (Optional / Experimental Backend)**:
-   - Experimental relational backend for multi-worker environments.
+2. **PostgreSQL Storage (Optional Backend)**:
+   - Optional relational backend for multi-worker environments; not required for standard assignment execution.
    - Requires external PostgreSQL database and driver (`pip install psycopg[binary]`).
 3. **SQLite Storage (Secondary / Local Backend)**:
    - Retained as a secondary file-backed relational driver for local evaluation.
@@ -90,22 +90,21 @@ pq.is_empty()                     # True / False
 ## 5. Time Complexity — Based on Implementation
 
 | Operation | JSON File Storage (Default) | SQLite / PostgreSQL (Relational) | Space Complexity |
-|:---|:---:|:---:|:---:|
-| `insert(id, prio, payload)` | $O(1)$ memory dict write + $O(N)$ disk write | $O(\log N)$ B-Tree write | $O(1)$ per item |
+|:---|:---|:---|:---:|
+| `insert(id, prio, payload)` | $O(1)$ memory write + $O(N)$ disk write | $O(\log N)$ B-Tree write | $O(1)$ per item |
 | `extract_min()` | $O(N)$ aging scan + $O(N)$ disk write | Index scan / table evaluation* | $O(1)$ |
 | `extract_max()` | $O(N)$ aging scan + $O(N)$ disk write | Index scan / table evaluation* | $O(1)$ |
 | `peek(mode)` | $O(N)$ aging scan | $O(1)$ / table evaluation* | $O(1)$ |
-| `update(id, prio, payload)` | $O(1)$ dict lookup + $O(N)$ disk write | $O(\log N)$ primary key update | $O(1)$ |
-| `delete(id)` | $O(1)$ dict delete + $O(N)$ disk write | $O(\log N)$ primary key delete | $O(1)$ |
+| `update(id, prio, payload)` | $O(1)$ memory lookup + $O(N)$ disk write | $O(\log N)$ primary key update | $O(1)$ |
+| `delete(id)` | $O(1)$ memory delete + $O(N)$ disk write | $O(\log N)$ primary key delete | $O(1)$ |
 | `is_empty()` | $O(1)$ | $O(1)$ | $O(1)$ |
 | `size()` | $O(1)$ | $O(1)$ | $O(1)$ |
 
 ### Data Structure Rationalization:
-The JSON backend uses an in-memory dictionary for persistent task records. Priority selection performs a linear scan because effective priority changes continuously with task age. This design favors simple persistence and arbitrary ID-based update/delete operations over heap-level extraction complexity.
-
-### Dynamic Priority Aging & Database Query Complexity:
-- When **`decay_rate = 0.0`** (static priorities): Database backends leverage the `(priority ASC, seq ASC)` B-Tree index for $O(\log N)$ min/max extraction.
-- When **`decay_rate > 0.0`** (dynamic aging): Ordering is governed by the expression `priority - decay_rate * (now - inserted_at)`. Because dynamic time expressions shift relative ordering over time, the static `(priority, seq)` index cannot directly represent the dynamic sort order without row evaluation by the query planner.
+- **JSON Storage**: Uses an in-memory dictionary for persistent task records with average $O(1)$ ID lookup. Priority extraction performs a linear scan because effective priority changes dynamically with elapsed time. Every write operation serializes the full JSON document to disk via atomic replacement ($O(N)$ disk I/O). This design prioritizes zero-dependency persistence and instant ID-based updates/deletions over heap extraction complexity.
+- **Relational Storage (SQLite / PostgreSQL)**:
+  - When **`decay_rate = 0.0`** (static priorities): Relational backends leverage the `(priority ASC, seq ASC)` B-Tree index for $O(\log N)$ min/max extraction.
+  - When **`decay_rate > 0.0`** (dynamic aging): Priority ordering is evaluated by `priority - decay_rate * (now - inserted_at)`. Because dynamic time expressions shift relative ordering over time, the static index cannot directly represent the dynamic sort order without candidate row evaluation by the database query planner.
 
 ---
 
@@ -132,20 +131,20 @@ Where:
 
 ## 7. Canonical REST API Reference
 
-The Flask application exposes a clean REST API:
+The Flask application exposes a REST API with backward-compatible aliases:
 
 | Method | Endpoint | Request Body | Description | Status Code |
 |:---|:---|:---|:---|:---:|
-| `GET` | `/api/health` | — | Lightweight health check verifying backend read availability | `200`, `500` |
-| `GET` | `/api/stats` | — | Queue metrics (size, oldest age, decay rate, session extracted count*) | `200` |
-| `GET` | `/api/queue` | — | All items sorted by effective priority | `200` |
-| `POST` | `/api/insert` | `{"item_id": "...", "priority": 10, "payload": "..."}` | Insert task with finite priority | `201`, `400` |
-| `POST` | `/api/extract-min` | — | Remove and return min effective priority task | `200`, `404` |
-| `POST` | `/api/extract-max` | — | Remove and return max effective priority task | `200`, `404` |
-| `GET` | `/api/peek?mode=min` | — | Inspect min/max without removal | `200`, `404` |
-| `PUT` | `/api/update/<id>` | `{"priority": 5, "payload": "updated note"}` | Update existing task (priority and/or payload) | `200`, `404` |
-| `DELETE` | `/api/delete/<id>` | — | Delete task by ID | `200`, `404` |
-| `POST` | `/api/clear` | — | Clear all tasks from queue | `200` |
+| `GET` | `/api/health` | — | Lightweight health check verifying storage availability | `200`, `500` |
+| `GET` | `/api/stats` | — | Queue operational metrics and session statistics | `200`, `500` |
+| `GET` | `/api/queue` | — | All items sorted by effective priority | `200`, `500` |
+| `POST` | `/api/insert` | `{"item_id": "...", "priority": 10, "payload": "..."}` | Insert task with finite priority | `201`, `400`, `500` |
+| `POST` | `/api/extract-min` | — | Remove and return min effective priority task *(alias: `/api/extract_min`)* | `200`, `404`, `500` |
+| `POST` | `/api/extract-max` | — | Remove and return max effective priority task *(alias: `/api/extract_max`)* | `200`, `404`, `500` |
+| `GET` | `/api/peek?mode=min` | — | Inspect min or max item without removal | `200`, `400`, `404`, `500` |
+| `PUT` | `/api/update/<id>` | `{"priority": 5, "payload": "updated note"}` | Update existing task *(aliases: `POST /api/update`, `POST /api/update/<id>`, `PUT /api/items/<id>`)* | `200`, `400`, `404`, `500` |
+| `DELETE` | `/api/delete/<id>` | — | Delete task by ID *(aliases: `POST /api/delete`, `POST /api/delete/<id>`, `DELETE /api/items/<id>`)* | `200`, `400`, `404`, `500` |
+| `POST` | `/api/clear` | — | Clear all tasks from queue | `200`, `500` |
 
 *\*Note: `extracted_count` is a session-level in-memory metric that resets on server restart.*
 
@@ -176,7 +175,7 @@ python -m venv .venv
 pip install -r requirements.txt
 
 # 3. Run complete automated test suite
-python -m pytest test_module.py -v --tb=short
+python -m pytest -v
 
 # 4. Run CLI demonstration script
 python example.py
@@ -185,6 +184,16 @@ python example.py
 python server.py
 # Visit http://localhost:5000 in your browser
 ```
+
+### Automated Test Suite Coverage:
+The automated test suite covers:
+- Core priority queue operations (`insert`, `extract_min`, `extract_max`, `peek`, `update`, `delete`, `is_empty`)
+- File-based persistence across process restarts and state recovery
+- Anti-starvation priority aging and dynamic priority decay calculations
+- Edge cases (finite priority validation, `NaN`/`Infinity` rejection, negative priorities, float values, nested storage directories)
+- REST API endpoint integration and consistent JSON response schemas
+- Input validation and sanitized error handling (no traceback leakage)
+- Deterministic FIFO tie-breaking and sequence recovery across restarts
 
 ### Docker Execution (Optional):
 
