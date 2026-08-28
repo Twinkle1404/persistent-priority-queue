@@ -1,6 +1,6 @@
 # Persistent Priority Queue with Priority Aging & Observability Console
 
-[![CI Test Suite](https://github.com/your-username/persistent-priority-queue/actions/workflows/test.yml/badge.svg)](https://github.com/your-username/persistent-priority-queue/actions)
+[![CI Test Suite](https://github.com/Twinkle1404/persistent-priority-queue/actions/workflows/test.yml/badge.svg)](https://github.com/Twinkle1404/persistent-priority-queue/actions)
 [![Python 3.10+](https://img.shields.io/badge/python-3.10%2B-blue.svg)](https://www.python.org/downloads/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 
