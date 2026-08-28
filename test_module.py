@@ -312,6 +312,32 @@ class TestPersistenceRecovery:
         assert pq2.extract_min() == ("tie_3", 5.0, "third")
         pq2.close()
 
+    def test_sequence_recovery_and_fifo_order_after_restart(self, tmp_path, backend_type):
+        ext = "db" if backend_type == "sqlite" else "json"
+        storage_path = str(tmp_path / f"persist_seq_recovery.{ext}")
+
+        # Insert 2 equal-priority tasks and close
+        pq1 = PersistentPriorityQueue(backend=backend_type, storage_file=storage_path)
+        pq1.insert("initial_1", priority=10.0, payload="first")
+        pq1.insert("initial_2", priority=10.0, payload="second")
+        pq1.close()
+
+        # Reopen queue and insert a 3rd equal-priority task
+        pq2 = PersistentPriorityQueue(backend=backend_type, storage_file=storage_path)
+        pq2.insert("after_restart_3", priority=10.0, payload="third")
+
+        # Extraction must yield initial_1 -> initial_2 -> after_restart_3
+        item1 = pq2.extract_min()
+        item2 = pq2.extract_min()
+        item3 = pq2.extract_min()
+
+        assert item1 == ("initial_1", 10.0, "first")
+        assert item2 == ("initial_2", 10.0, "second")
+        assert item3 == ("after_restart_3", 10.0, "third")
+        assert pq2.is_empty() is True
+        pq2.close()
+
+
 
 class TestJSONCorruptionHandling:
 
@@ -536,6 +562,34 @@ class TestEdgeCases:
         pq.close()
         assert nested_file.exists()
 
+    def test_nested_sqlite_directory_auto_created(self, tmp_path):
+        nested_db = tmp_path / "sqlite_deep" / "nested" / "dir" / "queue.db"
+        pq = PersistentPriorityQueue(backend="sqlite", storage_file=str(nested_db))
+        pq.insert("sqlite_task", priority=2.0, payload="data")
+        assert pq.size() == 1
+        pq.close()
+        assert nested_db.exists()
+
+    def test_update_priority_only_and_payload_only(self, tmp_path):
+        pq = PersistentPriorityQueue(backend="json", storage_file=str(tmp_path / "update_variations.json"))
+        pq.insert("var_task", priority=10.0, payload="original_payload")
+
+        # 1. Update priority only
+        assert pq.update("var_task", priority=20.0) is True
+        item = pq.peek()
+        assert item[1] == 20.0
+        assert item[2] == "original_payload"
+
+        # 2. Update payload only
+        assert pq.update("var_task", payload="modified_payload") is True
+        item = pq.peek()
+        assert item[1] == 20.0
+        assert item[2] == "modified_payload"
+
+        # 3. No-op update (neither priority nor payload provided)
+        assert pq.update("var_task") is False
+        pq.close()
+
 
 # ---------------------------------------------------------------------------
 # 6. Flask REST API Integration Tests
@@ -742,5 +796,36 @@ class TestFlaskAPI:
         # Verify payload is null
         peek_res = api_client.get("/api/peek")
         assert peek_res.get_json()["item"]["payload"] is None
+
+    def test_sanitized_500_error_response_no_traceback(self, api_client, monkeypatch):
+        import server
+        # Force an unexpected exception during get_all_items
+        def broken_get_all():
+            raise RuntimeError("Database storage disk connection crashed with internal path /secret/db")
+
+        monkeypatch.setattr(server.pq, "get_all_items", broken_get_all)
+
+        res = api_client.get("/api/queue")
+        assert res.status_code == 500
+        data = res.get_json()
+        assert data["success"] is False
+        assert data["error"] == "Internal server error"
+        # Must not leak internal exception details or paths
+        assert "/secret/db" not in str(data)
+
+    def test_sanitized_health_check_failure(self, api_client, monkeypatch):
+        import server
+        def broken_size():
+            raise RuntimeError("I/O device hardware error on /var/data/raw.db")
+
+        monkeypatch.setattr(server.pq, "size", broken_size)
+
+        res = api_client.get("/api/health")
+        assert res.status_code == 500
+        data = res.get_json()
+        assert data["status"] == "unhealthy"
+        assert data["error"] == "Storage backend unavailable"
+        assert "/var/data" not in str(data)
+
 
 
