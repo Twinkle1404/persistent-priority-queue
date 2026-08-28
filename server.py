@@ -5,11 +5,12 @@ Run: python server.py
 Open: http://localhost:5000
 """
 
+import math
 import os
 import time
 from typing import Any, Dict, Optional
 from flask import Flask, render_template, request, jsonify
-from module import PersistentPriorityQueue
+from module import PersistentPriorityQueue, validate_finite_priority
 
 app = Flask(__name__)
 
@@ -31,7 +32,7 @@ pq = PersistentPriorityQueue(
     decay_rate=DECAY_RATE,
 )
 
-# In-memory tracking for metrics
+# In-memory tracking for metrics (session-level)
 _extracted_count = 0
 
 
@@ -78,13 +79,22 @@ def index():
 
 @app.route("/api/health", methods=["GET"])
 def health():
-    """Simple system health and status check."""
-    return jsonify({
-        "status": "healthy",
-        "queue_size": pq.size(),
-        "backend": BACKEND,
-        "timestamp": time.time(),
-    }), 200
+    """Simple system health and status check verifying storage accessibility."""
+    try:
+        current_size = pq.size()
+        return jsonify({
+            "status": "healthy",
+            "queue_size": current_size,
+            "backend": BACKEND,
+            "timestamp": time.time(),
+        }), 200
+    except Exception as e:
+        return jsonify({
+            "status": "unhealthy",
+            "error": str(e),
+            "backend": BACKEND,
+            "timestamp": time.time(),
+        }), 500
 
 
 @app.route("/api/stats", methods=["GET"])
@@ -130,17 +140,19 @@ def insert_item():
             return jsonify({"success": False, "error": "Missing required field: priority"}), 400
 
         try:
-            priority = float(priority)
+            priority_val = float(priority)
+            if not math.isfinite(priority_val):
+                return jsonify({"success": False, "error": "Priority must be a finite number"}), 400
         except (ValueError, TypeError):
             return jsonify({"success": False, "error": "Priority must be a valid number"}), 400
 
-        pq.insert(item_id=str(item_id).strip(), priority=priority, payload=payload)
+        pq.insert(item_id=str(item_id).strip(), priority=priority_val, payload=payload)
         return jsonify({
             "success": True,
             "message": f"Item '{item_id}' inserted successfully",
             "item": {
                 "item_id": str(item_id).strip(),
-                "priority": priority,
+                "priority": priority_val,
                 "payload": payload,
             },
         }), 201
@@ -242,13 +254,16 @@ def update_item(item_id: Optional[str] = None):
         if priority is None and "payload" not in data:
             return jsonify({"success": False, "error": "Must provide 'priority' or 'payload' to update"}), 400
 
+        priority_val = None
         if priority is not None:
             try:
-                priority = float(priority)
+                priority_val = float(priority)
+                if not math.isfinite(priority_val):
+                    return jsonify({"success": False, "error": "Priority must be a finite number"}), 400
             except (ValueError, TypeError):
                 return jsonify({"success": False, "error": "Priority must be a valid number"}), 400
 
-        updated = pq.update(item_id=str(target_id).strip(), priority=priority, payload=payload)
+        updated = pq.update(item_id=str(target_id).strip(), priority=priority_val, payload=payload)
         if updated:
             return jsonify({"success": True, "message": f"Item '{target_id}' updated successfully"}), 200
         else:

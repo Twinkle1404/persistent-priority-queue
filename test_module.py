@@ -274,6 +274,74 @@ class TestPersistenceRecovery:
         assert pq2.is_empty() is True
         pq2.close()
 
+    def test_persistence_after_extract_across_restart(self, tmp_path, backend_type):
+        ext = "db" if backend_type == "sqlite" else "json"
+        storage_path = str(tmp_path / f"persist_extract_test.{ext}")
+
+        pq1 = PersistentPriorityQueue(backend=backend_type, storage_file=storage_path)
+        pq1.insert("task1", priority=10)
+        pq1.insert("task2", priority=20)
+        pq1.insert("task3", priority=30)
+        extracted = pq1.extract_min()
+        assert extracted[0] == "task1"
+        pq1.close()
+
+        # Re-open and verify remaining items exist and extracted item is gone
+        pq2 = PersistentPriorityQueue(backend=backend_type, storage_file=storage_path)
+        assert pq2.size() == 2
+        assert pq2.peek_min()[0] == "task2"
+        assert pq2.extract_min()[0] == "task2"
+        assert pq2.extract_min()[0] == "task3"
+        assert pq2.is_empty() is True
+        pq2.close()
+
+    def test_fifo_tie_breaking_across_restart(self, tmp_path, backend_type):
+        ext = "db" if backend_type == "sqlite" else "json"
+        storage_path = str(tmp_path / f"persist_fifo_test.{ext}")
+
+        pq1 = PersistentPriorityQueue(backend=backend_type, storage_file=storage_path)
+        pq1.insert("tie_1", priority=5, payload="first")
+        pq1.insert("tie_2", priority=5, payload="second")
+        pq1.insert("tie_3", priority=5, payload="third")
+        pq1.close()
+
+        # Reopen and verify deterministic FIFO ordering is preserved
+        pq2 = PersistentPriorityQueue(backend=backend_type, storage_file=storage_path)
+        assert pq2.extract_min() == ("tie_1", 5.0, "first")
+        assert pq2.extract_min() == ("tie_2", 5.0, "second")
+        assert pq2.extract_min() == ("tie_3", 5.0, "third")
+        pq2.close()
+
+
+class TestJSONCorruptionHandling:
+
+    def test_corrupted_json_raises_exception_and_preserves_file(self, tmp_path):
+        from module import PersistenceCorruptionError
+
+        corrupt_file = tmp_path / "corrupted_queue.json"
+        corrupt_content = '{"task1": {"priority": 10, "broken_json": '
+        corrupt_file.write_text(corrupt_content, encoding="utf-8")
+
+        # Initializing queue must raise PersistenceCorruptionError, NOT silently wipe state
+        with pytest.raises(PersistenceCorruptionError, match="Corrupted persistence file"):
+            PersistentPriorityQueue(backend="json", storage_file=str(corrupt_file))
+
+        # Ensure the corrupted file was preserved on disk and not overwritten
+        assert corrupt_file.exists()
+        assert corrupt_file.read_text(encoding="utf-8") == corrupt_content
+
+    def test_non_dict_json_raises_corruption_error(self, tmp_path):
+        from module import PersistenceCorruptionError
+
+        corrupt_file = tmp_path / "list_queue.json"
+        corrupt_file.write_text("[1, 2, 3]", encoding="utf-8")
+
+        with pytest.raises(PersistenceCorruptionError, match="must be a JSON object/dict"):
+            PersistentPriorityQueue(backend="json", storage_file=str(corrupt_file))
+
+        assert corrupt_file.exists()
+
+
 
 # ---------------------------------------------------------------------------
 # 3. Priority Aging / Anti-Starvation Tests
@@ -425,6 +493,25 @@ class TestEdgeCases:
         assert pq.extract_min()[0] == "c"
         pq.close()
 
+    def test_nan_and_infinity_priorities_rejected(self, tmp_path):
+        pq = PersistentPriorityQueue(backend="json", storage_file=str(tmp_path / "nan.json"))
+        with pytest.raises(ValueError, match="finite number"):
+            pq.insert("nan_task", priority=float("nan"))
+        with pytest.raises(ValueError, match="finite number"):
+            pq.insert("inf_task", priority=float("inf"))
+        with pytest.raises(ValueError, match="finite number"):
+            pq.insert("ninf_task", priority=float("-inf"))
+        pq.close()
+
+    def test_update_with_nan_and_infinity_rejected(self, tmp_path):
+        pq = PersistentPriorityQueue(backend="json", storage_file=str(tmp_path / "nan_up.json"))
+        pq.insert("valid_task", priority=10.0)
+        with pytest.raises(ValueError, match="finite number"):
+            pq.update("valid_task", priority=float("nan"))
+        with pytest.raises(ValueError, match="finite number"):
+            pq.update("valid_task", priority=float("inf"))
+        pq.close()
+
 
 # ---------------------------------------------------------------------------
 # 6. Flask REST API Integration Tests
@@ -465,6 +552,22 @@ class TestFlaskAPI:
         assert len(data["items"]) == 1
         assert data["items"][0]["item_id"] == "api_t1"
 
+    def test_duplicate_id_returns_400(self, api_client):
+        res1 = api_client.post(
+            "/api/insert",
+            data=json.dumps({"item_id": "dup_task", "priority": 10}),
+            content_type="application/json",
+        )
+        assert res1.status_code == 201
+
+        res2 = api_client.post(
+            "/api/insert",
+            data=json.dumps({"item_id": "dup_task", "priority": 20}),
+            content_type="application/json",
+        )
+        assert res2.status_code == 400
+        assert "already exists" in res2.get_json()["error"]
+
     def test_extract_min_and_max(self, api_client):
         api_client.post(
             "/api/insert",
@@ -501,6 +604,11 @@ class TestFlaskAPI:
         assert res.status_code == 200
         assert res.get_json()["item"]["item_id"] == "p1"
 
+    def test_invalid_peek_mode_returns_400(self, api_client):
+        res = api_client.get("/api/peek?mode=invalid_mode")
+        assert res.status_code == 400
+        assert res.get_json()["success"] is False
+
     def test_update_endpoint_restful(self, api_client):
         api_client.post(
             "/api/insert",
@@ -519,6 +627,14 @@ class TestFlaskAPI:
         # Verify update took effect
         peek_res = api_client.get("/api/peek")
         assert peek_res.get_json()["item"]["priority"] == 5.0
+
+    def test_update_non_existent_id_returns_404(self, api_client):
+        res = api_client.put(
+            "/api/update/does_not_exist",
+            data=json.dumps({"priority": 5}),
+            content_type="application/json",
+        )
+        assert res.status_code == 404
 
     def test_delete_endpoint_restful(self, api_client):
         api_client.post(
@@ -575,3 +691,13 @@ class TestFlaskAPI:
         # Non-json body
         r4 = api_client.post("/api/insert", data="plain text")
         assert r4.status_code == 400
+
+        # NaN / Infinity priority
+        r5 = api_client.post(
+            "/api/insert",
+            data=json.dumps({"item_id": "nan_task", "priority": float("nan")}),
+            content_type="application/json",
+        )
+        assert r5.status_code == 400
+        assert "finite" in r5.get_json()["error"]
+

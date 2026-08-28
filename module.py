@@ -16,11 +16,28 @@ Priority Aging Formula:
 
 import abc
 import json
+import math
 import os
 import sqlite3
 import threading
 import time
 from typing import Any, Dict, List, Optional, Tuple, Union
+
+
+class PersistenceCorruptionError(RuntimeError):
+    """Raised when a persistence storage file is corrupted or unreadable."""
+    pass
+
+
+def validate_finite_priority(priority: Any) -> float:
+    """Validate and convert priority to a finite float, rejecting NaN and Infinities."""
+    try:
+        p = float(priority)
+    except (ValueError, TypeError) as e:
+        raise ValueError(f"Priority must be a valid number, got {priority!r}") from e
+    if not math.isfinite(p):
+        raise ValueError(f"Priority must be a finite number, got {priority!r}")
+    return p
 
 
 # ---------------------------------------------------------------------------
@@ -297,20 +314,39 @@ class JSONFileStorage(StorageBackend):
 
     def _load(self) -> None:
         with self._lock:
-            if os.path.exists(self.file_path):
-                try:
-                    with open(self.file_path, "r", encoding="utf-8") as f:
-                        self._items = json.load(f)
-                except Exception:
-                    self._items = {}
-            else:
+            if not os.path.exists(self.file_path):
                 self._items = {}
+                return
+
+            try:
+                with open(self.file_path, "r", encoding="utf-8") as f:
+                    data = json.load(f)
+            except json.JSONDecodeError as e:
+                raise PersistenceCorruptionError(
+                    f"Corrupted persistence file at '{self.file_path}': invalid JSON format ({e}). "
+                    "The corrupted file has been preserved on disk without modification."
+                ) from e
+            except Exception as e:
+                raise PersistenceCorruptionError(
+                    f"Failed to read persistence file at '{self.file_path}': {e}. "
+                    "The file has been preserved on disk without modification."
+                ) from e
+
+            if not isinstance(data, dict):
+                raise PersistenceCorruptionError(
+                    f"Corrupted storage schema: root element in '{self.file_path}' must be a JSON object/dict, "
+                    f"got {type(data).__name__}. The corrupted file has been preserved on disk."
+                )
+
+            self._items = data
 
     def _save(self) -> None:
         with self._lock:
             temp_path = f"{self.file_path}.tmp"
             with open(temp_path, "w", encoding="utf-8") as f:
                 json.dump(self._items, f, indent=2)
+                f.flush()
+                os.fsync(f.fileno())
             os.replace(temp_path, self.file_path)
 
     @staticmethod
@@ -662,9 +698,10 @@ class PersistentPriorityQueue:
         :param priority: Numerical priority (lower = more urgent for extract_min).
         :param payload: Optional serializable data attached to the item.
         """
+        valid_prio = validate_finite_priority(priority)
         seq = self._next_seq()
         inserted_at = time.time()
-        self.backend.insert(str(item_id), float(priority), payload, seq, inserted_at)
+        self.backend.insert(str(item_id), valid_prio, payload, seq, inserted_at)
 
     def extract_min(self) -> Optional[Tuple[str, float, Any]]:
         """
@@ -717,9 +754,12 @@ class PersistentPriorityQueue:
         :param payload: New payload (or None to keep current).
         :return: True if updated, False if item not found.
         """
+        if priority is None and payload is None:
+            return False
+        valid_prio = validate_finite_priority(priority) if priority is not None else None
         return self.backend.update(
             str(item_id),
-            float(priority) if priority is not None else None,
+            valid_prio,
             payload,
         )
 
