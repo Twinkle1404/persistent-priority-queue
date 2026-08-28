@@ -1,0 +1,923 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Persistent Priority Queue — Observability Console</title>
+    <style>
+        :root {
+            --bg-dark: #0f172a;
+            --bg-card: #1e293b;
+            --bg-card-hover: #24344d;
+            --bg-input: #0f172a;
+            --text-main: #f8fafc;
+            --text-muted: #94a3b8;
+            --border-color: #334155;
+            --border-focus: #38bdf8;
+            --primary: #38bdf8;
+            --primary-hover: #0ea5e9;
+            --accent-green: #10b981;
+            --accent-green-hover: #059669;
+            --accent-red: #ef4444;
+            --accent-red-hover: #dc2626;
+            --accent-orange: #f59e0b;
+            --accent-gray: #64748b;
+            --accent-gray-hover: #475569;
+            --prio-low: #10b981;
+            --prio-med: #eab308;
+            --prio-high: #f97316;
+            --prio-crit: #ef4444;
+        }
+
+        * {
+            box-sizing: border-box;
+            margin: 0;
+            padding: 0;
+        }
+
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+            background-color: var(--bg-dark);
+            color: var(--text-main);
+            line-height: 1.5;
+            padding: 24px;
+        }
+
+        .container {
+            max-width: 1280px;
+            margin: 0 auto;
+        }
+
+        /* --- Header --- */
+        .header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            padding-bottom: 20px;
+            border-bottom: 1px solid var(--border-color);
+            margin-bottom: 24px;
+            flex-wrap: wrap;
+            gap: 12px;
+        }
+
+        .header-title-group h1 {
+            font-size: 1.5rem;
+            font-weight: 700;
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            color: var(--text-main);
+        }
+
+        .header-title-group p {
+            font-size: 0.875rem;
+            color: var(--text-muted);
+            margin-top: 4px;
+        }
+
+        .header-status {
+            display: flex;
+            align-items: center;
+            gap: 14px;
+        }
+
+        .status-pill {
+            display: inline-flex;
+            align-items: center;
+            gap: 8px;
+            padding: 6px 12px;
+            background-color: var(--bg-card);
+            border: 1px solid var(--border-color);
+            border-radius: 9999px;
+            font-size: 0.8125rem;
+            color: var(--text-main);
+        }
+
+        .status-dot {
+            width: 8px;
+            height: 8px;
+            border-radius: 50%;
+            background-color: var(--accent-green);
+            box-shadow: 0 0 8px rgba(16, 185, 129, 0.6);
+        }
+
+        .status-dot.disconnected {
+            background-color: var(--accent-red);
+            box-shadow: 0 0 8px rgba(239, 68, 68, 0.6);
+        }
+
+        .badge-backend {
+            padding: 4px 8px;
+            border-radius: 4px;
+            font-size: 0.75rem;
+            font-family: monospace;
+            background-color: rgba(56, 189, 248, 0.15);
+            color: var(--primary);
+            border: 1px solid rgba(56, 189, 248, 0.3);
+        }
+
+        /* --- Metrics Row --- */
+        .metrics-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+            gap: 16px;
+            margin-bottom: 24px;
+        }
+
+        .metric-card {
+            background-color: var(--bg-card);
+            border: 1px solid var(--border-color);
+            border-radius: 8px;
+            padding: 16px 20px;
+            transition: border-color 0.2s;
+        }
+
+        .metric-card:hover {
+            border-color: rgba(56, 189, 248, 0.4);
+        }
+
+        .metric-label {
+            font-size: 0.75rem;
+            font-weight: 600;
+            color: var(--text-muted);
+            text-transform: uppercase;
+            letter-spacing: 0.05em;
+            margin-bottom: 6px;
+        }
+
+        .metric-value {
+            font-size: 1.5rem;
+            font-weight: 700;
+            font-family: monospace;
+            color: var(--text-main);
+        }
+
+        .metric-sub {
+            font-size: 0.75rem;
+            color: var(--text-muted);
+            margin-top: 4px;
+        }
+
+        /* --- Control Toolbar --- */
+        .toolbar {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            background-color: var(--bg-card);
+            border: 1px solid var(--border-color);
+            border-radius: 8px;
+            padding: 14px 18px;
+            margin-bottom: 20px;
+            flex-wrap: wrap;
+            gap: 14px;
+        }
+
+        .toolbar-left, .toolbar-right {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            flex-wrap: wrap;
+        }
+
+        .search-input {
+            background-color: var(--bg-input);
+            border: 1px solid var(--border-color);
+            color: var(--text-main);
+            padding: 8px 12px;
+            border-radius: 6px;
+            font-size: 0.875rem;
+            min-width: 220px;
+        }
+
+        .search-input:focus, .select-input:focus {
+            outline: none;
+            border-color: var(--border-focus);
+        }
+
+        .select-input {
+            background-color: var(--bg-input);
+            border: 1px solid var(--border-color);
+            color: var(--text-main);
+            padding: 8px 12px;
+            border-radius: 6px;
+            font-size: 0.875rem;
+        }
+
+        /* --- Buttons --- */
+        .btn {
+            display: inline-flex;
+            align-items: center;
+            gap: 6px;
+            padding: 8px 14px;
+            border-radius: 6px;
+            border: none;
+            cursor: pointer;
+            font-size: 0.875rem;
+            font-weight: 600;
+            transition: background-color 0.15s, opacity 0.15s;
+        }
+
+        .btn:disabled {
+            opacity: 0.5;
+            cursor: not-allowed;
+        }
+
+        .btn-primary { background-color: var(--primary); color: #0f172a; }
+        .btn-primary:hover:not(:disabled) { background-color: var(--primary-hover); }
+
+        .btn-green { background-color: var(--accent-green); color: #fff; }
+        .btn-green:hover:not(:disabled) { background-color: var(--accent-green-hover); }
+
+        .btn-red { background-color: var(--accent-red); color: #fff; }
+        .btn-red:hover:not(:disabled) { background-color: var(--accent-red-hover); }
+
+        .btn-gray { background-color: var(--accent-gray); color: #fff; }
+        .btn-gray:hover:not(:disabled) { background-color: var(--accent-gray-hover); }
+
+        .btn-sm {
+            padding: 4px 8px;
+            font-size: 0.75rem;
+        }
+
+        /* --- Queue Table --- */
+        .table-container {
+            background-color: var(--bg-card);
+            border: 1px solid var(--border-color);
+            border-radius: 8px;
+            overflow: hidden;
+            box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.2);
+        }
+
+        table {
+            width: 100%;
+            border-collapse: collapse;
+            text-align: left;
+            font-size: 0.875rem;
+        }
+
+        th {
+            background-color: rgba(15, 23, 42, 0.6);
+            color: var(--text-muted);
+            font-weight: 600;
+            padding: 12px 16px;
+            border-bottom: 1px solid var(--border-color);
+            text-transform: uppercase;
+            font-size: 0.75rem;
+            letter-spacing: 0.05em;
+        }
+
+        td {
+            padding: 14px 16px;
+            border-bottom: 1px solid var(--border-color);
+            vertical-align: middle;
+        }
+
+        tr:last-child td {
+            border-bottom: none;
+        }
+
+        tr:hover td {
+            background-color: var(--bg-card-hover);
+        }
+
+        .task-id {
+            font-family: monospace;
+            font-weight: 600;
+            color: var(--text-main);
+        }
+
+        .prio-badge {
+            display: inline-block;
+            padding: 3px 8px;
+            border-radius: 4px;
+            font-size: 0.75rem;
+            font-weight: 700;
+            font-family: monospace;
+        }
+
+        .decay-visual {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            font-family: monospace;
+            font-size: 0.75rem;
+        }
+
+        .decay-bar-wrap {
+            width: 60px;
+            height: 6px;
+            background-color: rgba(255, 255, 255, 0.1);
+            border-radius: 3px;
+            overflow: hidden;
+        }
+
+        .decay-bar {
+            height: 100%;
+            background-color: var(--primary);
+            border-radius: 3px;
+        }
+
+        .payload-preview {
+            max-width: 260px;
+            white-space: nowrap;
+            overflow: hidden;
+            text-overflow: ellipsis;
+            color: var(--text-muted);
+            font-size: 0.8125rem;
+        }
+
+        .row-actions {
+            display: flex;
+            gap: 6px;
+        }
+
+        /* --- Empty State --- */
+        .empty-state {
+            padding: 48px 24px;
+            text-align: center;
+            color: var(--text-muted);
+        }
+
+        .empty-state h3 {
+            color: var(--text-main);
+            margin-bottom: 8px;
+            font-size: 1.125rem;
+        }
+
+        /* --- Modal --- */
+        .modal-overlay {
+            display: none;
+            position: fixed;
+            top: 0; left: 0; right: 0; bottom: 0;
+            background-color: rgba(0, 0, 0, 0.7);
+            z-index: 1000;
+            justify-content: center;
+            align-items: center;
+            padding: 20px;
+        }
+
+        .modal-overlay.active {
+            display: flex;
+        }
+
+        .modal-card {
+            background-color: var(--bg-card);
+            border: 1px solid var(--border-color);
+            border-radius: 8px;
+            max-width: 480px;
+            width: 100%;
+            padding: 24px;
+            box-shadow: 0 10px 25px rgba(0, 0, 0, 0.5);
+        }
+
+        .modal-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 18px;
+            border-bottom: 1px solid var(--border-color);
+            padding-bottom: 12px;
+        }
+
+        .modal-close {
+            background: none;
+            border: none;
+            color: var(--text-muted);
+            font-size: 1.25rem;
+            cursor: pointer;
+        }
+
+        .form-group {
+            margin-bottom: 14px;
+        }
+
+        .form-group label {
+            display: block;
+            font-size: 0.8125rem;
+            font-weight: 600;
+            color: var(--text-muted);
+            margin-bottom: 6px;
+        }
+
+        .form-control {
+            width: 100%;
+            padding: 9px 12px;
+            background-color: var(--bg-input);
+            border: 1px solid var(--border-color);
+            border-radius: 6px;
+            color: var(--text-main);
+            font-family: inherit;
+            font-size: 0.875rem;
+        }
+
+        .form-control:focus {
+            outline: none;
+            border-color: var(--border-focus);
+        }
+
+        .modal-actions {
+            display: flex;
+            justify-content: flex-end;
+            gap: 10px;
+            margin-top: 20px;
+        }
+
+        /* --- Toast Notifications --- */
+        .toast-container {
+            position: fixed;
+            top: 20px;
+            right: 20px;
+            z-index: 2000;
+            display: flex;
+            flex-direction: column;
+            gap: 10px;
+        }
+
+        .toast {
+            background-color: var(--bg-card);
+            color: var(--text-main);
+            border: 1px solid var(--border-color);
+            padding: 12px 18px;
+            border-radius: 6px;
+            box-shadow: 0 8px 16px rgba(0, 0, 0, 0.3);
+            display: flex;
+            align-items: center;
+            gap: 12px;
+            font-size: 0.875rem;
+            transform: translateX(120%);
+            transition: transform 0.25s ease-out;
+            min-width: 280px;
+        }
+
+        .toast.show { transform: translateX(0); }
+        .toast.success { border-left: 4px solid var(--accent-green); }
+        .toast.error { border-left: 4px solid var(--accent-red); }
+        .toast.info { border-left: 4px solid var(--primary); }
+
+        .loading-spinner {
+            display: inline-block;
+            width: 14px;
+            height: 14px;
+            border: 2px solid rgba(255, 255, 255, 0.3);
+            border-radius: 50%;
+            border-top-color: var(--primary);
+            animation: spin 0.8s linear infinite;
+        }
+
+        @keyframes spin {
+            to { transform: rotate(360deg); }
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <!-- Header -->
+        <header class="header">
+            <div class="header-title-group">
+                <h1>⚡ Persistent Priority Queue</h1>
+                <p>Real-time queue monitoring console with anti-starvation priority aging</p>
+            </div>
+            <div class="header-status">
+                <span class="badge-backend" id="backendBadge">Storage: JSON File</span>
+                <div class="status-pill">
+                    <span class="status-dot" id="healthDot"></span>
+                    <span id="healthStatusText">System Healthy</span>
+                </div>
+            </div>
+        </header>
+
+        <!-- Observability Metrics -->
+        <section class="metrics-grid">
+            <div class="metric-card">
+                <div class="metric-label">Pending Tasks</div>
+                <div class="metric-value" id="metricSize">0</div>
+                <div class="metric-sub" id="metricEmptyStatus">Queue empty</div>
+            </div>
+            <div class="metric-card">
+                <div class="metric-label">Processed (Session)</div>
+                <div class="metric-value" id="metricExtracted">0</div>
+                <div class="metric-sub">Extractions completed</div>
+            </div>
+            <div class="metric-card">
+                <div class="metric-label">Oldest Task Age</div>
+                <div class="metric-value" id="metricOldestAge">0.0s</div>
+                <div class="metric-sub">Waiting time in queue</div>
+            </div>
+            <div class="metric-card">
+                <div class="metric-label">Decay Rate</div>
+                <div class="metric-value" id="metricDecay">0.01/s</div>
+                <div class="metric-sub">Aging velocity</div>
+            </div>
+        </section>
+
+        <!-- Control Toolbar -->
+        <section class="toolbar">
+            <div class="toolbar-left">
+                <input type="text" id="searchInput" class="search-input" placeholder="🔍 Search ID or payload..." oninput="handleSearch()">
+                <select id="sortSelect" class="select-input" onchange="handleSort()">
+                    <option value="effective_asc">Sort: Effective Priority (Min First)</option>
+                    <option value="effective_desc">Sort: Effective Priority (Max First)</option>
+                    <option value="base_asc">Sort: Base Priority (Asc)</option>
+                    <option value="age_desc">Sort: Oldest First</option>
+                    <option value="id_asc">Sort: Task ID</option>
+                </select>
+            </div>
+            <div class="toolbar-right">
+                <button class="btn btn-primary" onclick="openInsertModal()">+ Add Task</button>
+                <button class="btn btn-green" id="btnExtractMin" onclick="extractItem('min')">Extract Min (Urgent)</button>
+                <button class="btn btn-red" id="btnExtractMax" onclick="extractItem('max')">Extract Max</button>
+                <button class="btn btn-gray" onclick="clearQueue()">Clear All</button>
+            </div>
+        </section>
+
+        <!-- Queue Table -->
+        <section class="table-container">
+            <table>
+                <thead>
+                    <tr>
+                        <th style="width: 50px;">#</th>
+                        <th>Task ID</th>
+                        <th>Base Prio</th>
+                        <th>Effective Prio</th>
+                        <th>Aging / Decay</th>
+                        <th>Age</th>
+                        <th>Payload</th>
+                        <th style="width: 140px; text-align: right;">Actions</th>
+                    </tr>
+                </thead>
+                <tbody id="queueBody">
+                    <!-- Dynamic rows rendered via JavaScript -->
+                </tbody>
+            </table>
+            <div id="emptyState" class="empty-state" style="display: none;">
+                <h3>Queue is empty</h3>
+                <p>Add a task to start monitoring your persistent priority queue.</p>
+                <button class="btn btn-primary" style="margin-top: 14px;" onclick="openInsertModal()">+ Add First Task</button>
+            </div>
+        </section>
+    </div>
+
+    <!-- Insert Task Modal -->
+    <div class="modal-overlay" id="insertModal">
+        <div class="modal-card">
+            <div class="modal-header">
+                <h3>Add New Task</h3>
+                <button class="modal-close" onclick="closeInsertModal()">&times;</button>
+            </div>
+            <form id="insertForm" onsubmit="handleInsertSubmit(event)">
+                <div class="form-group">
+                    <label for="taskIdInput">Task Identifier (ID)</label>
+                    <input type="text" id="taskIdInput" class="form-control" placeholder="e.g. task_payment_sync" required>
+                </div>
+                <div class="form-group">
+                    <label for="taskPrioInput">Base Priority (Numerical score, e.g. 1 = Urgent, 100 = Low)</label>
+                    <input type="number" step="any" id="taskPrioInput" class="form-control" placeholder="10" required>
+                </div>
+                <div class="form-group">
+                    <label for="taskPayloadInput">Payload (Optional note or JSON string)</label>
+                    <textarea id="taskPayloadInput" class="form-control" rows="3" placeholder="Process invoice payload"></textarea>
+                </div>
+                <div class="modal-actions">
+                    <button type="button" class="btn btn-gray" onclick="closeInsertModal()">Cancel</button>
+                    <button type="submit" class="btn btn-primary">Add Task</button>
+                </div>
+            </form>
+        </div>
+    </div>
+
+    <!-- Edit Task Modal -->
+    <div class="modal-overlay" id="editModal">
+        <div class="modal-card">
+            <div class="modal-header">
+                <h3>Edit Task: <span id="editModalTaskId" style="font-family: monospace;"></span></h3>
+                <button class="modal-close" onclick="closeEditModal()">&times;</button>
+            </div>
+            <form id="editForm" onsubmit="handleEditSubmit(event)">
+                <input type="hidden" id="editTaskIdHidden">
+                <div class="form-group">
+                    <label for="editPrioInput">New Base Priority</label>
+                    <input type="number" step="any" id="editPrioInput" class="form-control" required>
+                </div>
+                <div class="form-group">
+                    <label for="editPayloadInput">New Payload</label>
+                    <textarea id="editPayloadInput" class="form-control" rows="3"></textarea>
+                </div>
+                <div class="modal-actions">
+                    <button type="button" class="btn btn-gray" onclick="closeEditModal()">Cancel</button>
+                    <button type="submit" class="btn btn-primary">Save Changes</button>
+                </div>
+            </form>
+        </div>
+    </div>
+
+    <!-- Toast Notifications -->
+    <div class="toast-container" id="toastContainer"></div>
+
+    <script>
+        // Global state
+        let rawQueueData = [];
+        let decayRate = 0.01;
+        let searchQuery = "";
+        let currentSort = "effective_asc";
+
+        // Toast Helper
+        function showToast(message, type = 'info') {
+            const container = document.getElementById('toastContainer');
+            const toast = document.createElement('div');
+            toast.className = `toast ${type}`;
+            toast.innerHTML = `
+                <span style="flex-grow: 1;">${message}</span>
+                <span style="cursor: pointer; opacity: 0.6;" onclick="this.parentElement.remove()">&times;</span>
+            `;
+            container.appendChild(toast);
+            setTimeout(() => toast.classList.add('show'), 10);
+            setTimeout(() => {
+                toast.classList.remove('show');
+                setTimeout(() => toast.remove(), 300);
+            }, 3500);
+        }
+
+        // Format seconds
+        function formatAge(seconds) {
+            if (seconds < 60) return `${seconds.toFixed(1)}s`;
+            const mins = Math.floor(seconds / 60);
+            const secs = Math.floor(seconds % 60);
+            if (mins < 60) return `${mins}m ${secs}s`;
+            const hours = Math.floor(mins / 60);
+            return `${hours}h ${mins % 60}m`;
+        }
+
+        // Get priority color badge
+        function getPriorityBadge(prio) {
+            let bg = 'rgba(16, 185, 129, 0.2)';
+            let color = 'var(--prio-low)';
+            let label = 'Low';
+
+            if (prio >= 75) {
+                bg = 'rgba(239, 68, 68, 0.2)';
+                color = 'var(--prio-crit)';
+                label = 'Critical';
+            } else if (prio >= 50) {
+                bg = 'rgba(249, 115, 22, 0.2)';
+                color = 'var(--prio-high)';
+                label = 'High';
+            } else if (prio >= 25) {
+                bg = 'rgba(234, 179, 8, 0.2)';
+                color = 'var(--prio-med)';
+                label = 'Medium';
+            }
+            return `<span class="prio-badge" style="background-color: ${bg}; color: ${color};">${prio.toFixed(2)}</span>`;
+        }
+
+        // Fetch Queue from API
+        async function fetchQueue() {
+            try {
+                const res = await fetch('/api/queue');
+                if (!res.ok) throw new Error('API request failed');
+                const data = await res.json();
+                
+                rawQueueData = data.items || [];
+                const stats = data.stats || {};
+
+                // Update Metrics
+                document.getElementById('metricSize').textContent = stats.size || 0;
+                document.getElementById('metricEmptyStatus').textContent = stats.size > 0 ? 'Active tasks' : 'Queue empty';
+                document.getElementById('metricExtracted').textContent = stats.extracted_count || 0;
+                document.getElementById('metricOldestAge').textContent = formatAge(stats.oldest_age_seconds || 0);
+                document.getElementById('metricDecay').textContent = `${stats.decay_rate || 0}/s`;
+                decayRate = stats.decay_rate || 0;
+                
+                if (stats.backend) {
+                    document.getElementById('backendBadge').textContent = `Storage: ${stats.backend.toUpperCase()}`;
+                }
+
+                // Health dot
+                document.getElementById('healthDot').className = 'status-dot';
+                document.getElementById('healthStatusText').textContent = 'System Healthy';
+
+                // Render table
+                renderTable();
+            } catch (err) {
+                document.getElementById('healthDot').className = 'status-dot disconnected';
+                document.getElementById('healthStatusText').textContent = 'API Offline';
+            }
+        }
+
+        // Render Table with Filtering and Sorting
+        function renderTable() {
+            const tbody = document.getElementById('queueBody');
+            const emptyState = document.getElementById('emptyState');
+
+            let filtered = rawQueueData.filter(item => {
+                if (!searchQuery) return true;
+                const q = searchQuery.toLowerCase();
+                const idMatch = item.item_id.toLowerCase().includes(q);
+                const payloadMatch = typeof item.payload === 'string' 
+                    ? item.payload.toLowerCase().includes(q) 
+                    : JSON.stringify(item.payload || '').toLowerCase().includes(q);
+                return idMatch || payloadMatch;
+            });
+
+            // Sort
+            filtered.sort((a, b) => {
+                if (currentSort === 'effective_asc') return a.effective_priority - b.effective_priority;
+                if (currentSort === 'effective_desc') return b.effective_priority - a.effective_priority;
+                if (currentSort === 'base_asc') return a.priority - b.priority;
+                if (currentSort === 'age_desc') return b.age_seconds - a.age_seconds;
+                if (currentSort === 'id_asc') return a.item_id.localeCompare(b.item_id);
+                return 0;
+            });
+
+            if (filtered.length === 0) {
+                tbody.innerHTML = '';
+                emptyState.style.display = 'block';
+                return;
+            }
+
+            emptyState.style.display = 'none';
+            tbody.innerHTML = filtered.map((item, idx) => {
+                const decayAmount = Math.max(0, item.priority - item.effective_priority);
+                const decayPct = item.priority > 0 ? Math.min(100, (decayAmount / item.priority) * 100) : 0;
+                const payloadDisplay = item.payload !== null 
+                    ? (typeof item.payload === 'object' ? JSON.stringify(item.payload) : String(item.payload))
+                    : '<span style="color: var(--text-muted);">None</span>';
+
+                return `
+                    <tr>
+                        <td style="color: var(--text-muted); font-family: monospace;">#${idx + 1}</td>
+                        <td class="task-id">${item.item_id}</td>
+                        <td style="font-family: monospace;">${item.priority.toFixed(1)}</td>
+                        <td>${getPriorityBadge(item.effective_priority)}</td>
+                        <td>
+                            <div class="decay-visual">
+                                <div class="decay-bar-wrap">
+                                    <div class="decay-bar" style="width: ${decayPct}%;"></div>
+                                </div>
+                                <span>-${decayAmount.toFixed(2)}</span>
+                            </div>
+                        </td>
+                        <td style="color: var(--text-muted); font-size: 0.8125rem;">${formatAge(item.age_seconds)}</td>
+                        <td><div class="payload-preview" title="${payloadDisplay}">${payloadDisplay}</div></td>
+                        <td style="text-align: right;">
+                            <div class="row-actions" style="justify-content: flex-end;">
+                                <button class="btn btn-gray btn-sm" onclick="openEditModal('${item.item_id}', ${item.priority}, \`${payloadDisplay.replace(/`/g, '\\`')}\`)">Edit</button>
+                                <button class="btn btn-red btn-sm" onclick="deleteItem('${item.item_id}')">Delete</button>
+                            </div>
+                        </td>
+                    </tr>
+                `;
+            }).join('');
+        }
+
+        // Search and Sort
+        function handleSearch() {
+            searchQuery = document.getElementById('searchInput').value.trim();
+            renderTable();
+        }
+
+        function handleSort() {
+            currentSort = document.getElementById('sortSelect').value;
+            renderTable();
+        }
+
+        // Modal Controls
+        function openInsertModal() {
+            document.getElementById('insertModal').classList.add('active');
+            document.getElementById('taskIdInput').focus();
+        }
+        function closeInsertModal() {
+            document.getElementById('insertModal').classList.remove('active');
+            document.getElementById('insertForm').reset();
+        }
+
+        function openEditModal(itemId, prio, payload) {
+            document.getElementById('editModalTaskId').textContent = itemId;
+            document.getElementById('editTaskIdHidden').value = itemId;
+            document.getElementById('editPrioInput').value = prio;
+            document.getElementById('editPayloadInput').value = payload === '<span style="color: var(--text-muted);">None</span>' ? '' : payload;
+            document.getElementById('editModal').classList.add('active');
+        }
+        function closeEditModal() {
+            document.getElementById('editModal').classList.remove('active');
+        }
+
+        // Handle API Actions
+        async function handleInsertSubmit(e) {
+            e.preventDefault();
+            const itemId = document.getElementById('taskIdInput').value.trim();
+            const priority = parseFloat(document.getElementById('taskPrioInput').value);
+            const payloadRaw = document.getElementById('taskPayloadInput').value.trim();
+            let payload = payloadRaw || null;
+
+            try {
+                if (payloadRaw.startsWith('{') || payloadRaw.startsWith('[')) {
+                    payload = JSON.parse(payloadRaw);
+                }
+            } catch (_) {}
+
+            try {
+                const res = await fetch('/api/insert', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ item_id: itemId, priority: priority, payload: payload })
+                });
+                const data = await res.json();
+                if (res.ok && data.success) {
+                    showToast(`Task '${itemId}' inserted`, 'success');
+                    closeInsertModal();
+                    fetchQueue();
+                } else {
+                    showToast(data.error || 'Failed to insert task', 'error');
+                }
+            } catch (err) {
+                showToast('Network error while inserting task', 'error');
+            }
+        }
+
+        async function handleEditSubmit(e) {
+            e.preventDefault();
+            const itemId = document.getElementById('editTaskIdHidden').value;
+            const priority = parseFloat(document.getElementById('editPrioInput').value);
+            const payloadRaw = document.getElementById('editPayloadInput').value.trim();
+            let payload = payloadRaw || null;
+
+            try {
+                if (payloadRaw.startsWith('{') || payloadRaw.startsWith('[')) {
+                    payload = JSON.parse(payloadRaw);
+                }
+            } catch (_) {}
+
+            try {
+                const res = await fetch(`/api/update/${encodeURIComponent(itemId)}`, {
+                    method: 'PUT',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ priority: priority, payload: payload })
+                });
+                const data = await res.json();
+                if (res.ok && data.success) {
+                    showToast(`Task '${itemId}' updated`, 'success');
+                    closeEditModal();
+                    fetchQueue();
+                } else {
+                    showToast(data.error || 'Failed to update task', 'error');
+                }
+            } catch (err) {
+                showToast('Network error while updating task', 'error');
+            }
+        }
+
+        async function extractItem(mode) {
+            const endpoint = mode === 'min' ? '/api/extract-min' : '/api/extract-max';
+            try {
+                const res = await fetch(endpoint, { method: 'POST' });
+                const data = await res.json();
+                if (res.ok && data.success) {
+                    const item = data.item;
+                    showToast(`Extracted ${mode.toUpperCase()}: ${item.item_id} (Priority: ${item.priority})`, 'success');
+                    fetchQueue();
+                } else {
+                    showToast(data.error || 'Queue is empty', 'error');
+                }
+            } catch (err) {
+                showToast('Network error during extraction', 'error');
+            }
+        }
+
+        async function deleteItem(itemId) {
+            if (!confirm(`Delete task '${itemId}'?`)) return;
+            try {
+                const res = await fetch(`/api/delete/${encodeURIComponent(itemId)}`, { method: 'DELETE' });
+                const data = await res.json();
+                if (res.ok && data.success) {
+                    showToast(`Task '${itemId}' deleted`, 'info');
+                    fetchQueue();
+                } else {
+                    showToast(data.error || 'Failed to delete task', 'error');
+                }
+            } catch (err) {
+                showToast('Network error during deletion', 'error');
+            }
+        }
+
+        async function clearQueue() {
+            if (!confirm('Are you sure you want to clear all tasks from the queue?')) return;
+            try {
+                const res = await fetch('/api/clear', { method: 'POST' });
+                const data = await res.json();
+                if (res.ok && data.success) {
+                    showToast('Queue cleared', 'info');
+                    fetchQueue();
+                } else {
+                    showToast(data.error || 'Failed to clear queue', 'error');
+                }
+            } catch (err) {
+                showToast('Network error while clearing queue', 'error');
+            }
+        }
+
+        // Initialize polling (every 2 seconds)
+        fetchQueue();
+        setInterval(fetchQueue, 2000);
+    </script>
+</body>
+</html>

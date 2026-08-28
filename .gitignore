@@ -1,0 +1,35 @@
+# Byte-compiled / optimized / DLL files
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Pytest and cache
+.pytest_cache/
+.coverage
+htmlcov/
+
+# Local databases and queue storage
+*.db
+*.db-journal
+*.db-wal
+*.db-shm
+*.json.tmp
+example_queue.db
+example_queue.json
+priority_queue.db
+priority_queue.json
+test_pq*
+
+# Environments and IDE
+.venv/
+venv/
+ENV/
+.env
+.idea/
+.vscode/
+
+# Build and logs
+*.log
+dist/
+build/
+*.egg-info/
