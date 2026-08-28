@@ -214,7 +214,7 @@ docker compose up --build
 6. **How are equal-priority ties resolved?**
    *A monotonic sequence counter initialized higher than existing items provides deterministic First-In, First-Out (FIFO) ordering for items managed by the queue instance.*
 7. **What is the complexity of each operation?**
-   *JSON backend: $O(1)$ memory lookup, $O(N)$ linear aging evaluation scan and disk serialization. Relational backend: $O(\log N)$ B-Tree index operations (when static).*
+   *JSON backend: $O(1)$ memory lookup, $O(N)$ linear aging evaluation scan, and $O(N)$ full JSON disk serialization. Relational backends (SQLite/PostgreSQL): $O(\log N)$ B-Tree index operations when priorities are static (`decay_rate = 0.0`), but dynamic aging (`decay_rate > 0.0`) evaluates `priority - decay_rate * age`, requiring row evaluation by the query planner.*
 8. **Why validate for finite numbers?**
    *`float("nan")` and `float("inf")` break comparison logic and sort invariants in Python and databases. We reject non-finite values at the API and library boundaries.*
 9. **How is thread safety achieved?**

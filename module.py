@@ -1,7 +1,7 @@
 """
 module.py - Persistent Priority Queue with Priority Aging
 
-A robust, thread-safe, persistent priority queue implementing the required SDE assignment operations:
+A robust, assignment-focused persistent priority queue in Python implementing the required SDE operations:
   - insert, extract_min, extract_max, peek, update, delete, is_empty
   - Priority decay / aging: old items automatically become more urgent over time
   - Pluggable storage backends: JSON (default file-based), SQLite (local secondary), PostgreSQL (optional relational)
