@@ -8,7 +8,7 @@ services:
       - "5000:5000"
     environment:
       - PQ_BACKEND=json
-      - PQ_STORAGE_FILE=priority_queue.json
+      - PQ_STORAGE_FILE=/app/data/priority_queue.json
       - PQ_DECAY_RATE=0.01
       - PQ_PORT=5000
     volumes:

@@ -512,6 +512,30 @@ class TestEdgeCases:
             pq.update("valid_task", priority=float("inf"))
         pq.close()
 
+    def test_update_payload_to_none_explicitly(self, tmp_path):
+        pq = PersistentPriorityQueue(backend="json", storage_file=str(tmp_path / "payload_none.json"))
+        pq.insert("task_p", priority=10.0, payload={"initial": "value"})
+        assert pq.peek()[2] == {"initial": "value"}
+
+        # Explicitly set payload to None
+        assert pq.update("task_p", payload=None) is True
+        assert pq.peek()[2] is None
+
+        # Update priority only; payload should remain None
+        assert pq.update("task_p", priority=5.0) is True
+        item = pq.peek()
+        assert item[1] == 5.0
+        assert item[2] is None
+        pq.close()
+
+    def test_nested_directory_auto_created(self, tmp_path):
+        nested_file = tmp_path / "deep" / "nested" / "dir" / "queue.json"
+        pq = PersistentPriorityQueue(backend="json", storage_file=str(nested_file))
+        pq.insert("nested_task", priority=1.0, payload="deep")
+        assert pq.size() == 1
+        pq.close()
+        assert nested_file.exists()
+
 
 # ---------------------------------------------------------------------------
 # 6. Flask REST API Integration Tests
@@ -700,4 +724,23 @@ class TestFlaskAPI:
         )
         assert r5.status_code == 400
         assert "finite" in r5.get_json()["error"]
+
+    def test_update_payload_to_null_in_api(self, api_client):
+        api_client.post(
+            "/api/insert",
+            data=json.dumps({"item_id": "item_null_test", "priority": 10, "payload": "initial note"}),
+            content_type="application/json",
+        )
+        # Update payload to null
+        res = api_client.put(
+            "/api/update/item_null_test",
+            data=json.dumps({"payload": None}),
+            content_type="application/json",
+        )
+        assert res.status_code == 200
+
+        # Verify payload is null
+        peek_res = api_client.get("/api/peek")
+        assert peek_res.get_json()["item"]["payload"] is None
+
 

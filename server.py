@@ -5,12 +5,15 @@ Run: python server.py
 Open: http://localhost:5000
 """
 
+import logging
 import math
 import os
 import time
 from typing import Any, Dict, Optional
 from flask import Flask, render_template, request, jsonify
-from module import PersistentPriorityQueue, validate_finite_priority
+from module import PersistentPriorityQueue, validate_finite_priority, _UNCHANGED
+
+logger = logging.getLogger(__name__)
 
 app = Flask(__name__)
 
@@ -89,9 +92,10 @@ def health():
             "timestamp": time.time(),
         }), 200
     except Exception as e:
+        logger.exception("Health check failed: %s", e)
         return jsonify({
             "status": "unhealthy",
-            "error": str(e),
+            "error": "Storage backend unavailable",
             "backend": BACKEND,
             "timestamp": time.time(),
         }), 500
@@ -103,7 +107,8 @@ def get_stats():
     try:
         return jsonify(_build_stats()), 200
     except Exception as e:
-        return jsonify({"success": False, "error": str(e)}), 500
+        logger.exception("Stats retrieval failed: %s", e)
+        return jsonify({"success": False, "error": "Internal server error"}), 500
 
 
 # ---------------------------------------------------------------------------
@@ -118,7 +123,8 @@ def get_queue():
         stats = _build_stats()
         return jsonify({"items": items, "stats": stats}), 200
     except Exception as e:
-        return jsonify({"success": False, "error": str(e)}), 500
+        logger.exception("Queue retrieval failed: %s", e)
+        return jsonify({"success": False, "error": "Internal server error"}), 500
 
 
 @app.route("/api/insert", methods=["POST"])
@@ -159,7 +165,8 @@ def insert_item():
     except ValueError as e:
         return jsonify({"success": False, "error": str(e)}), 400
     except Exception as e:
-        return jsonify({"success": False, "error": str(e)}), 500
+        logger.exception("Unexpected error inserting item: %s", e)
+        return jsonify({"success": False, "error": "Internal server error"}), 500
 
 
 @app.route("/api/extract_min", methods=["POST"])
@@ -182,7 +189,8 @@ def extract_min():
             },
         }), 200
     except Exception as e:
-        return jsonify({"success": False, "error": str(e)}), 500
+        logger.exception("Unexpected error in extract_min: %s", e)
+        return jsonify({"success": False, "error": "Internal server error"}), 500
 
 
 @app.route("/api/extract_max", methods=["POST"])
@@ -205,7 +213,8 @@ def extract_max():
             },
         }), 200
     except Exception as e:
-        return jsonify({"success": False, "error": str(e)}), 500
+        logger.exception("Unexpected error in extract_max: %s", e)
+        return jsonify({"success": False, "error": "Internal server error"}), 500
 
 
 @app.route("/api/peek", methods=["GET"])
@@ -231,7 +240,8 @@ def peek_item():
     except ValueError as e:
         return jsonify({"success": False, "error": str(e)}), 400
     except Exception as e:
-        return jsonify({"success": False, "error": str(e)}), 500
+        logger.exception("Unexpected error in peek: %s", e)
+        return jsonify({"success": False, "error": "Internal server error"}), 500
 
 
 @app.route("/api/update", methods=["POST"])
@@ -249,9 +259,9 @@ def update_item(item_id: Optional[str] = None):
             return jsonify({"success": False, "error": "Missing required field: item_id"}), 400
 
         priority = data.get("priority")
-        payload = data.get("payload")
+        payload = data["payload"] if "payload" in data else _UNCHANGED
 
-        if priority is None and "payload" not in data:
+        if priority is None and payload is _UNCHANGED:
             return jsonify({"success": False, "error": "Must provide 'priority' or 'payload' to update"}), 400
 
         priority_val = None
@@ -271,7 +281,8 @@ def update_item(item_id: Optional[str] = None):
     except ValueError as e:
         return jsonify({"success": False, "error": str(e)}), 400
     except Exception as e:
-        return jsonify({"success": False, "error": str(e)}), 500
+        logger.exception("Unexpected error in update: %s", e)
+        return jsonify({"success": False, "error": "Internal server error"}), 500
 
 
 @app.route("/api/delete", methods=["POST"])
@@ -295,7 +306,8 @@ def delete_item(item_id: Optional[str] = None):
         else:
             return jsonify({"success": False, "error": f"Item '{target_id}' not found"}), 404
     except Exception as e:
-        return jsonify({"success": False, "error": str(e)}), 500
+        logger.exception("Unexpected error in delete: %s", e)
+        return jsonify({"success": False, "error": "Internal server error"}), 500
 
 
 @app.route("/api/clear", methods=["POST"])
@@ -305,7 +317,8 @@ def clear_queue():
         pq.clear()
         return jsonify({"success": True, "message": "Queue cleared"}), 200
     except Exception as e:
-        return jsonify({"success": False, "error": str(e)}), 500
+        logger.exception("Unexpected error in clear: %s", e)
+        return jsonify({"success": False, "error": "Internal server error"}), 500
 
 
 if __name__ == "__main__":

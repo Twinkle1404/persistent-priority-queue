@@ -51,7 +51,7 @@ In accordance with assignment guidelines:
    - Primary persistence solution using temporary file writes + `os.fsync()` + atomic filesystem replacement (`os.replace`).
    - If an existing persistence file is corrupted or unreadable, the loader raises `PersistenceCorruptionError` and **preserves the corrupted file on disk** rather than silently wiping queue data.
 2. **PostgreSQL Storage (Optional Relational Backend)**:
-   - Production relational backend connecting via standard PostgreSQL connection strings.
+   - Optional relational backend connecting via standard PostgreSQL connection strings.
    - Install optional driver via: `pip install psycopg[binary]`
 3. **SQLite Storage (Secondary / Local Backend)**:
    - Retained as a local secondary utility for local benchmarking.
@@ -60,7 +60,7 @@ In accordance with assignment guidelines:
 
 ---
 
-## 4. Algorithmic Complexity (Honest & Measured)
+## 4. Algorithmic Complexity & Data Structure Design
 
 Complexity breakdown based on the actual implementation:
 
@@ -75,7 +75,10 @@ Complexity breakdown based on the actual implementation:
 | `is_empty()` | $O(1)$ | $O(1)$ | $O(1)$ |
 | `size()` | $O(1)$ | $O(1)$ | $O(1)$ |
 
-### *Dynamic Priority Aging & Database Query Complexity Note:
+### Data Structure Rationalization:
+The JSON backend uses an in-memory dictionary for persistent task records. Priority selection performs a linear scan because effective priority changes continuously with task age. This design favors simple persistence and arbitrary ID-based update/delete operations over heap-level extraction complexity.
+
+### Dynamic Priority Aging & Database Query Complexity:
 - When **`decay_rate = 0.0`** (static priorities): Database backends leverage the `(priority ASC, seq ASC)` B-Tree index for $O(\log N)$ min/max extraction.
 - When **`decay_rate > 0.0`** (dynamic aging): Ordering is governed by the expression `priority - decay_rate * (now - inserted_at)`. Because dynamic time expressions shift relative ordering over time, the static `(priority, seq)` index cannot directly represent the dynamic sort order without row evaluation by the query planner.
 
@@ -133,6 +136,8 @@ Where:
    └───────────────────┘ └───────────┘ └───────────────────┘
 ```
 
+> **Concurrency & Multi-Process Boundary**: Thread safety is provided within a process using reentrant locks (`threading.RLock`). Multi-process or distributed consumers would require database-level transactional claiming/locking (e.g. `SELECT FOR UPDATE SKIP LOCKED`).
+
 ---
 
 ## 7. Canonical REST API Reference
@@ -148,7 +153,7 @@ The Flask application exposes a clean REST API:
 | `POST` | `/api/extract-min` | — | Remove and return min effective priority task | `200`, `404` |
 | `POST` | `/api/extract-max` | — | Remove and return max effective priority task | `200`, `404` |
 | `GET` | `/api/peek?mode=min` | — | Inspect min/max without removal | `200`, `404` |
-| `PUT` | `/api/update/<id>` | `{"priority": 5, "payload": "updated note"}` | Update existing task | `200`, `404` |
+| `PUT` | `/api/update/<id>` | `{"priority": 5, "payload": "updated note"}` | Update existing task (priority and/or payload) | `200`, `404` |
 | `DELETE` | `/api/delete/<id>` | — | Delete task by ID | `200`, `404` |
 | `POST` | `/api/clear` | — | Clear all tasks from queue | `200` |
 
@@ -180,7 +185,7 @@ python -m venv .venv
 # 2. Install dependencies
 pip install -r requirements.txt
 
-# 3. Run complete automated test suite (63 tests)
+# 3. Run complete automated test suite
 python -m pytest test_module.py -v --tb=short
 
 # 4. Run CLI demonstration script
@@ -191,10 +196,15 @@ python server.py
 # Visit http://localhost:5000 in your browser
 ```
 
-### Optional Docker Execution:
+### Docker Execution (Optional):
+
+The Docker configuration mounts a persistent volume to `/app/data` with `PQ_STORAGE_FILE=/app/data/priority_queue.json`, protecting queue state across container restarts:
 
 ```bash
+# Build and start container
 docker compose up --build
+
+# Verify in browser at http://localhost:5000
 ```
 
 ---
@@ -212,7 +222,7 @@ docker compose up --build
 5. **What happens if a persistence file is corrupted?**
    *The loader detects JSON corruption, raises `PersistenceCorruptionError`, and preserves the original file on disk without overwriting it.*
 6. **How are equal-priority ties resolved?**
-   *A monotonic microsecond sequence counter provides deterministic First-In, First-Out (FIFO) ordering for items managed by the queue instance.*
+   *A monotonic sequence counter initialized higher than existing items provides deterministic First-In, First-Out (FIFO) ordering for items managed by the queue instance.*
 7. **What is the complexity of each operation?**
    *JSON backend: $O(1)$ memory lookup, $O(N)$ linear aging evaluation scan and disk serialization. Relational backend: $O(\log N)$ B-Tree index operations (when static).*
 8. **Why validate for finite numbers?**
@@ -231,7 +241,7 @@ Persistent priority queue/
 │
 ├── module.py               # Core Priority Queue implementation & storage drivers
 ├── server.py               # Flask REST API server and observability router
-├── test_module.py          # 63 Automated unit, persistence, aging & API tests
+├── test_module.py          # Automated unit, persistence, aging & API tests
 ├── example.py              # CLI demonstration & persistence walkthrough
 ├── requirements.txt        # Python package dependencies (Flask, Pytest)
 ├── Dockerfile              # Container definition for deployment

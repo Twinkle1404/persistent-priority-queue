@@ -24,6 +24,9 @@ import time
 from typing import Any, Dict, List, Optional, Tuple, Union
 
 
+_UNCHANGED = object()
+
+
 class PersistenceCorruptionError(RuntimeError):
     """Raised when a persistence storage file is corrupted or unreadable."""
     pass
@@ -68,7 +71,7 @@ class StorageBackend(abc.ABC):
         pass
 
     @abc.abstractmethod
-    def update(self, item_id: str, priority: Optional[float] = None, payload: Optional[Any] = None) -> bool:
+    def update(self, item_id: str, priority: Optional[float] = None, payload: Any = _UNCHANGED) -> bool:
         """Update existing item's priority and/or payload. Returns True if updated."""
         pass
 
@@ -118,6 +121,9 @@ class SQLiteStorage(StorageBackend):
         self.db_path = db_path
         self.table_name = table_name
         self._lock = threading.RLock()
+        dir_name = os.path.dirname(os.path.abspath(self.db_path))
+        if dir_name:
+            os.makedirs(dir_name, exist_ok=True)
         self._conn = sqlite3.connect(self.db_path, check_same_thread=False)
         self._conn.execute("PRAGMA journal_mode=WAL;")
         self._init_db()
@@ -234,8 +240,8 @@ class SQLiteStorage(StorageBackend):
                 "inserted_at": inserted_at,
             }
 
-    def update(self, item_id: str, priority: Optional[float] = None, payload: Optional[Any] = None) -> bool:
-        if priority is None and payload is None:
+    def update(self, item_id: str, priority: Optional[float] = None, payload: Any = _UNCHANGED) -> bool:
+        if priority is None and payload is _UNCHANGED:
             return False
         with self._lock, self._conn:
             cursor = self._conn.cursor()
@@ -247,7 +253,7 @@ class SQLiteStorage(StorageBackend):
                 return False
             curr_priority, curr_payload_json = row
             new_priority = float(priority) if priority is not None else curr_priority
-            new_payload_json = json.dumps(payload) if payload is not None else curr_payload_json
+            new_payload_json = json.dumps(payload) if payload is not _UNCHANGED else curr_payload_json
             cursor.execute(
                 f"UPDATE {self.table_name} SET priority = ?, payload = ? WHERE item_id = ?",
                 (new_priority, new_payload_json, item_id),
@@ -310,6 +316,9 @@ class JSONFileStorage(StorageBackend):
         self.file_path = file_path
         self._lock = threading.RLock()
         self._items: Dict[str, Dict[str, Any]] = {}
+        dir_name = os.path.dirname(os.path.abspath(self.file_path))
+        if dir_name:
+            os.makedirs(dir_name, exist_ok=True)
         self._load()
 
     def _load(self) -> None:
@@ -412,15 +421,15 @@ class JSONFileStorage(StorageBackend):
                 )
             return dict(item)
 
-    def update(self, item_id: str, priority: Optional[float] = None, payload: Optional[Any] = None) -> bool:
-        if priority is None and payload is None:
+    def update(self, item_id: str, priority: Optional[float] = None, payload: Any = _UNCHANGED) -> bool:
+        if priority is None and payload is _UNCHANGED:
             return False
         with self._lock:
             if item_id not in self._items:
                 return False
             if priority is not None:
                 self._items[item_id]["priority"] = float(priority)
-            if payload is not None:
+            if payload is not _UNCHANGED:
                 self._items[item_id]["payload"] = payload
             self._save()
             return True
@@ -460,27 +469,26 @@ class JSONFileStorage(StorageBackend):
 
 class PostgreSQLStorage(StorageBackend):
     """
-    Relational database persistent storage backend powered by PostgreSQL.
-    Requires `psycopg2` or `psycopg` driver and a running PostgreSQL instance.
+    Relational database storage backend using PostgreSQL (optional backend).
+    Install driver: pip install psycopg[binary]
     """
 
     def __init__(self, connection_dsn: str, table_name: str = "priority_queue"):
-        self.connection_dsn = connection_dsn
+        self.dsn = connection_dsn
         self.table_name = table_name
         self._lock = threading.RLock()
         try:
-            import psycopg2
-            self._psycopg = psycopg2
+            import psycopg
+            self._psycopg = psycopg
         except ImportError:
             try:
-                import psycopg
+                import psycopg2 as psycopg
                 self._psycopg = psycopg
             except ImportError:
                 raise ImportError(
-                    "PostgreSQLStorage requires 'psycopg2' or 'psycopg' driver. "
-                    "Install via `pip install psycopg2-binary` or `pip install psycopg`."
+                    "PostgreSQL driver not installed. Install with: pip install psycopg[binary]"
                 )
-        self._conn = self._psycopg.connect(self.connection_dsn)
+        self._conn = self._psycopg.connect(self.dsn)
         self._conn.autocommit = True
         self._init_db()
 
@@ -489,7 +497,7 @@ class PostgreSQLStorage(StorageBackend):
             cursor.execute(
                 f"""
                 CREATE TABLE IF NOT EXISTS {self.table_name} (
-                    item_id VARCHAR(255) PRIMARY KEY,
+                    item_id TEXT PRIMARY KEY,
                     priority DOUBLE PRECISION NOT NULL,
                     payload TEXT,
                     seq BIGINT NOT NULL,
@@ -518,8 +526,9 @@ class PostgreSQLStorage(StorageBackend):
     def _build_order_sql(self, direction: str, decay_rate: float) -> str:
         if decay_rate == 0.0:
             return f"ORDER BY priority {direction}, seq ASC"
-        now = time.time()
-        return f"ORDER BY (priority - ({decay_rate} * ({now} - inserted_at))) {direction}, seq ASC"
+        else:
+            now = time.time()
+            return f"ORDER BY (priority - ({decay_rate} * ({now} - inserted_at))) {direction}, seq ASC"
 
     def extract_min(self, decay_rate: float = 0.0) -> Optional[Dict[str, Any]]:
         with self._lock, self._conn.cursor() as cursor:
@@ -563,8 +572,8 @@ class PostgreSQLStorage(StorageBackend):
             item_id, priority, payload_json, seq, inserted_at = row
             return {"item_id": item_id, "priority": priority, "payload": json.loads(payload_json), "seq": seq, "inserted_at": inserted_at}
 
-    def update(self, item_id: str, priority: Optional[float] = None, payload: Optional[Any] = None) -> bool:
-        if priority is None and payload is None:
+    def update(self, item_id: str, priority: Optional[float] = None, payload: Any = _UNCHANGED) -> bool:
+        if priority is None and payload is _UNCHANGED:
             return False
         with self._lock, self._conn.cursor() as cursor:
             cursor.execute(f"SELECT priority, payload FROM {self.table_name} WHERE item_id = %s", (item_id,))
@@ -573,7 +582,7 @@ class PostgreSQLStorage(StorageBackend):
                 return False
             curr_priority, curr_payload_json = row
             new_priority = float(priority) if priority is not None else curr_priority
-            new_payload_json = json.dumps(payload) if payload is not None else curr_payload_json
+            new_payload_json = json.dumps(payload) if payload is not _UNCHANGED else curr_payload_json
             cursor.execute(
                 f"UPDATE {self.table_name} SET priority = %s, payload = %s WHERE item_id = %s",
                 (new_priority, new_payload_json, item_id),
@@ -635,7 +644,7 @@ class PersistentPriorityQueue:
     Storage backends:
       'json'     — Primary file-based JSON storage with atomic writes (zero dependencies)
       'sqlite'   — File-based SQLite relational storage
-      'postgres' — PostgreSQL relational database
+      'postgres' — PostgreSQL relational database (optional)
       StorageBackend instance — Custom backend
     """
 
@@ -654,7 +663,6 @@ class PersistentPriorityQueue:
         :param table_name: Table/collection name in the storage.
         :param decay_rate: Priority decay rate per second (0.0 = disabled).
         """
-        self._seq_counter = int(time.time() * 1000000)
         self._lock = threading.RLock()
         self.decay_rate = float(decay_rate)
 
@@ -674,6 +682,11 @@ class PersistentPriorityQueue:
             raise ValueError(
                 f"Unsupported backend '{backend}'. Use 'json', 'sqlite', 'postgres', or a StorageBackend instance."
             )
+
+        # Monotonically seed sequence counter higher than any existing items loaded from disk
+        existing_items = self.backend.get_all_items()
+        max_existing_seq = max((item.get("seq", 0) for item in existing_items), default=0)
+        self._seq_counter = max(int(time.time() * 1000000), max_existing_seq)
 
     def _next_seq(self) -> int:
         with self._lock:
@@ -745,16 +758,16 @@ class PersistentPriorityQueue:
         """Convenience: peek at max-priority item."""
         return self.peek(mode="max")
 
-    def update(self, item_id: str, priority: Optional[float] = None, payload: Optional[Any] = None) -> bool:
+    def update(self, item_id: str, priority: Optional[float] = None, payload: Any = _UNCHANGED) -> bool:
         """
         Update an existing item's priority and/or payload.
 
         :param item_id: Item identifier.
         :param priority: New base priority (or None to keep current).
-        :param payload: New payload (or None to keep current).
+        :param payload: New payload (or _UNCHANGED to keep current, can be None).
         :return: True if updated, False if item not found.
         """
-        if priority is None and payload is None:
+        if priority is None and payload is _UNCHANGED:
             return False
         valid_prio = validate_finite_priority(priority) if priority is not None else None
         return self.backend.update(
@@ -857,7 +870,7 @@ def peek(mode: str = "min") -> Optional[Tuple[str, float, Any]]:
     return get_default_queue().peek(mode)
 
 
-def update(item_id: str, priority: Optional[float] = None, payload: Optional[Any] = None) -> bool:
+def update(item_id: str, priority: Optional[float] = None, payload: Any = _UNCHANGED) -> bool:
     return get_default_queue().update(item_id, priority, payload)
 
 
