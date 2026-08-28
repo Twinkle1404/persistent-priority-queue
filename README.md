@@ -197,7 +197,7 @@ The automated test suite covers:
 
 ### Docker Execution (Optional):
 
-The Docker configuration mounts a persistent volume to `/app/data` with `PQ_STORAGE_FILE=/app/data/priority_queue.json`, protecting queue state across container restarts:
+Docker stores the JSON persistence file at `/app/data/priority_queue.json`. The `/app/data` directory is backed by the Docker named volume `data`, protecting queue state across container restarts:
 
 ```bash
 # Build and start container
