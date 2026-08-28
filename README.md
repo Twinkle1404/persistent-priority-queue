@@ -10,19 +10,47 @@ A Python implementation of a persistent priority queue satisfying the seven requ
 
 ## 1. Quick Summary (2-Minute Scan)
 
-- **What was built**: A thread-safe, crash-durable Priority Queue module (`module.py`) in Python that serves the highest-urgency tasks first and persists its state across process restarts.
-- **Why it was built**: Solves in-memory task loss during application crashes (via atomic disk persistence with `fsync`) and prevents low-priority task starvation (via dynamic priority aging).
-- **Core Design**:
-  - **JSON File Storage (Default)**: Primary assignment-compliant persistence with zero external dependencies and atomic file replacement.
-  - **PostgreSQL Storage (Optional)**: Optional relational database backend for production deployments.
-  - **SQLite Storage (Secondary / Local)**: File-backed relational storage retained as a local secondary utility.
-  - **Observability Console**: Real-time web dashboard with live search, sorting, and decay visualizers.
+- **WHAT**: A thread-safe, persistent priority queue (`module.py`) that serves high-urgency tasks first and persists state across process restarts.
+- **WHY**: In-memory task queues lose all state on crashes. Furthermore, standard priority queues suffer from **task starvation** when high-priority tasks continuously arrive. Priority aging prevents starvation by dynamically increasing the urgency of older tasks.
+- **HOW**: Implemented in Python standard library with atomic JSON file persistence (zero external dependencies), an anti-starvation dynamic aging formula, a Flask REST API, and a real-time observability console.
 
 ---
 
-## 2. Core 7 Required Operations
+## 2. Assignment Requirements & Compliance Matrix
 
-The core queue module (`module.py`) is completely independent from Flask and exposes all 7 assignment operations:
+| Requirement | Implementation in `module.py` | Status | Notes |
+|:---|:---|:---:|:---|
+| `insert(item, priority)` | `PersistentPriorityQueue.insert()` | ✅ Yes | Validates finite numbers; rejects `NaN`/`Inf` |
+| `extract_min` | `PersistentPriorityQueue.extract_min()` | ✅ Yes | Removes & returns lowest effective priority item |
+| `extract_max` | `PersistentPriorityQueue.extract_max()` | ✅ Yes | Removes & returns highest effective priority item |
+| `peek` | `PersistentPriorityQueue.peek(mode="min"\|"max")` | ✅ Yes | Inspects top item without removing |
+| `update` | `PersistentPriorityQueue.update(id, prio, payload)` | ✅ Yes | Updates priority and/or payload (supports `None`) |
+| `delete` | `PersistentPriorityQueue.delete(item_id)` | ✅ Yes | Removes item by string ID |
+| `is_empty` | `PersistentPriorityQueue.is_empty()` | ✅ Yes | Returns boolean |
+| **Persistence** | `JSONFileStorage` / `SQLiteStorage` | ✅ Yes | State persists across process restarts |
+| **Module Independence** | `module.py` has **zero** Flask dependency | ✅ Yes | Usable purely via `from module import PersistentPriorityQueue` |
+
+---
+
+## 3. Core Architecture & Project Story
+
+The project is structured in clean, progressive layers:
+
+```
+[Core Priority Queue (module.py)]
+              ↓
+  [Atomic JSON Persistence (fsync + replace)]
+              ↓
+  [Priority Aging Engine (Anti-Starvation)]
+              ↓
+  [Comprehensive Automated Test Suite (test_module.py)]
+              ↓
+  [REST API Layer (server.py)]
+              ↓
+  [Web Observability Console (templates/index.html)]
+```
+
+### Core Usage (`module.py`):
 
 ```python
 from module import PersistentPriorityQueue
@@ -39,39 +67,36 @@ pq.delete("task_payment")
 pq.is_empty()                     # True / False
 ```
 
-*(Note: `from module import PriorityQueue` is also supported as an alias).*
+*(Note: `from module import PriorityQueue` is also exported as an alias).*
 
 ---
 
-## 3. Persistence Strategy & Durability Guarantees
+## 4. Persistence Strategy & Durability
 
-In accordance with assignment guidelines:
-
-1. **JSON File Storage (Primary Default)**:
+1. **JSON File Storage (Default & Primary Assignment Backend)**:
    - Primary persistence solution using temporary file writes + `os.fsync()` + atomic filesystem replacement (`os.replace`).
+   - Designed to reduce the risk of partial file writes upon unexpected process termination.
    - If an existing persistence file is corrupted or unreadable, the loader raises `PersistenceCorruptionError` and **preserves the corrupted file on disk** rather than silently wiping queue data.
-2. **PostgreSQL Storage (Optional Relational Backend)**:
-   - Optional relational backend connecting via standard PostgreSQL connection strings.
-   - Install optional driver via: `pip install psycopg[binary]`
+2. **PostgreSQL Storage (Optional / Experimental Backend)**:
+   - Experimental relational backend for multi-worker environments.
+   - Requires external PostgreSQL database and driver (`pip install psycopg[binary]`).
 3. **SQLite Storage (Secondary / Local Backend)**:
-   - Retained as a local secondary utility for local benchmarking.
+   - Retained as a secondary file-backed relational driver for local evaluation.
 
-> **Durability Scope**: Designed as a robust **single-node persistent queue** with a pluggable storage architecture. Atomic filesystem replacement and `fsync` protect against partial write corruption on crashes. This is a single-node queue, not a distributed transactional system.
+> **Concurrency Scope**: Thread safety is provided within a single process using reentrant locks (`threading.RLock`). Multi-process or distributed consumers would require database-level transactional claiming/locking (such as `SELECT FOR UPDATE SKIP LOCKED`).
 
 ---
 
-## 4. Algorithmic Complexity & Data Structure Design
-
-Complexity breakdown based on the actual implementation:
+## 5. Time Complexity — Based on Implementation
 
 | Operation | JSON File Storage (Default) | SQLite / PostgreSQL (Relational) | Space Complexity |
 |:---|:---:|:---:|:---:|
-| `insert(id, prio, payload)` | $O(1)$ memory dict write + $O(N)$ disk flush | $O(\log N)$ B-Tree write | $O(1)$ per item |
-| `extract_min()` | $O(N)$ aging scan + $O(N)$ disk flush | Index scan / table evaluation* | $O(1)$ |
-| `extract_max()` | $O(N)$ aging scan + $O(N)$ disk flush | Index scan / table evaluation* | $O(1)$ |
+| `insert(id, prio, payload)` | $O(1)$ memory dict write + $O(N)$ disk write | $O(\log N)$ B-Tree write | $O(1)$ per item |
+| `extract_min()` | $O(N)$ aging scan + $O(N)$ disk write | Index scan / table evaluation* | $O(1)$ |
+| `extract_max()` | $O(N)$ aging scan + $O(N)$ disk write | Index scan / table evaluation* | $O(1)$ |
 | `peek(mode)` | $O(N)$ aging scan | $O(1)$ / table evaluation* | $O(1)$ |
-| `update(id, prio, payload)` | $O(1)$ dict lookup + $O(N)$ disk flush | $O(\log N)$ primary key update | $O(1)$ |
-| `delete(id)` | $O(1)$ dict delete + $O(N)$ disk flush | $O(\log N)$ primary key delete | $O(1)$ |
+| `update(id, prio, payload)` | $O(1)$ dict lookup + $O(N)$ disk write | $O(\log N)$ primary key update | $O(1)$ |
+| `delete(id)` | $O(1)$ dict delete + $O(N)$ disk write | $O(\log N)$ primary key delete | $O(1)$ |
 | `is_empty()` | $O(1)$ | $O(1)$ | $O(1)$ |
 | `size()` | $O(1)$ | $O(1)$ | $O(1)$ |
 
@@ -84,10 +109,10 @@ The JSON backend uses an in-memory dictionary for persistent task records. Prior
 
 ---
 
-## 5. Priority Aging & Anti-Starvation
+## 6. Priority Aging & Anti-Starvation
 
 ### The Starvation Problem:
-In a classic priority queue, if high-priority tasks (e.g. priority `1.0`) continuously arrive, low-priority tasks (e.g. priority `100.0`) will wait indefinitely in the queue and never execute (starvation).
+In standard priority queues, if high-priority tasks (e.g. priority `1.0`) continuously arrive, low-priority tasks (e.g. priority `100.0`) wait indefinitely in the queue and never execute (starvation).
 
 ### The Mathematical Solution:
 $$\text{Effective Priority} = \text{Base Priority} - (\text{Decay Rate} \times \text{Age in Seconds})$$
@@ -102,41 +127,6 @@ Where:
 - **Task B (Newly arrived task)**: Base priority = `60.0`, age = $0\text{ s} \implies \text{Effective} = 60.0 - (5.0 \times 0) = \mathbf{60.0}$
 
 **Result**: Task A's effective priority drops to `50.0`, overtaking Task B (`60.0`). Task A is extracted first by `extract_min()`, preventing starvation. Setting `decay_rate=0.0` reproduces standard priority queue behavior.
-
----
-
-## 6. Architecture & System Design
-
-```
-┌─────────────────────────────────────────────────────────────┐
-│              Live Web Observability Console                 │
-│                 (templates/index.html)                      │
-└──────────────────────────────┬──────────────────────────────┘
-                               │ HTTP / REST API
-┌──────────────────────────────▼──────────────────────────────┐
-│                    Flask API Server                         │
-│                      (server.py)                            │
-│   /api/health  /api/stats  /api/queue  /api/extract-min     │
-└──────────────────────────────┬──────────────────────────────┘
-                               │ Python API
-┌──────────────────────────────▼──────────────────────────────┐
-│              PersistentPriorityQueue (module.py)            │
-│         - Monotonic Sequence (Strict FIFO Tie-Breaking)     │
-│         - Dynamic Aging Engine                              │
-│         - Reentrant Thread Safety (threading.RLock)         │
-│         - Finite Priority Validation (math.isfinite)        │
-└──────────────────────────────┬──────────────────────────────┘
-                               │ Storage Backend Adapter
-             ┌─────────────────┼─────────────────┐
-             ▼                 ▼                 ▼
-   ┌───────────────────┐ ┌───────────┐ ┌───────────────────┐
-   │ JSONFileStorage   │ │  SQLite   │ │ PostgreSQLStorage │
-   │ (Primary Default) │ │ (Secondary│ │(Optional Relation)│
-   │  Atomic + fsync   │ │  B-Tree)  │ │   ACID Storage    │
-   └───────────────────┘ └───────────┘ └───────────────────┘
-```
-
-> **Concurrency & Multi-Process Boundary**: Thread safety is provided within a process using reentrant locks (`threading.RLock`). Multi-process or distributed consumers would require database-level transactional claiming/locking (e.g. `SELECT FOR UPDATE SKIP LOCKED`).
 
 ---
 

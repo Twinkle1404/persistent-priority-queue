@@ -84,7 +84,7 @@ def main():
 
     # The older task has decayed from 100 -> ~60, which is < 75. It will be extracted first!
     extracted = pq_aging.extract_min()
-    print(f"\n  -> extract_min() returned: '{extracted[0]}' (Effective Priority: {extracted[1]:.2f})")
+    print(f"\n  -> extract_min() returned: '{extracted[0]}' (Base Priority: {extracted[1]:.2f})")
     print("  [OK] Proven: Older task overtook newer task due to aging decay, preventing starvation!")
     pq_aging.close()
 

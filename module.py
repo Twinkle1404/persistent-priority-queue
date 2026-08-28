@@ -1,10 +1,10 @@
 """
 module.py - Persistent Priority Queue with Priority Aging
 
-A production-grade, thread-safe, persistent priority queue supporting:
+A robust, thread-safe, persistent priority queue implementing the required SDE assignment operations:
   - insert, extract_min, extract_max, peek, update, delete, is_empty
   - Priority decay / aging: old items automatically become more urgent over time
-  - Pluggable storage backends: SQLite (file), JSON (file), PostgreSQL (database)
+  - Pluggable storage backends: JSON (default file-based), SQLite (local secondary), PostgreSQL (optional relational)
 
 Priority Aging Formula:
   effective_priority = base_priority - (decay_rate × age_in_seconds)
